@@ -62,8 +62,6 @@ namespace PdfSharp.Pdf.Advanced
                 throw new ArgumentNullException("brush");
 
             PdfColorMode colorMode = _document.Options.ColorMode;
-            XColor color1 = ColorSpaceHelper.EnsureColorMode(colorMode, brush._color1);
-            XColor color2 = ColorSpaceHelper.EnsureColorMode(colorMode, brush._color2);
 
             PdfDictionary function = new PdfDictionary();
 
@@ -74,52 +72,14 @@ namespace PdfSharp.Pdf.Advanced
                 Elements[Keys.ColorSpace] = new PdfName("/DeviceCMYK");
 
             double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
-            if (brush._useRect)
-            {
-                XPoint pt1 = renderer.WorldToView(brush._rect.TopLeft);
-                XPoint pt2 = renderer.WorldToView(brush._rect.BottomRight);
 
-                switch (brush._linearGradientMode)
-                {
-                    case XLinearGradientMode.Horizontal:
-                        x1 = pt1.X;
-                        y1 = pt1.Y;
-                        x2 = pt2.X;
-                        y2 = pt1.Y;
-                        break;
+            XPoint pt1 = renderer.WorldToView(brush._point1);
+            XPoint pt2 = renderer.WorldToView(brush._point2);
 
-                    case XLinearGradientMode.Vertical:
-                        x1 = pt1.X;
-                        y1 = pt1.Y;
-                        x2 = pt1.X;
-                        y2 = pt2.Y;
-                        break;
-
-                    case XLinearGradientMode.ForwardDiagonal:
-                        x1 = pt1.X;
-                        y1 = pt1.Y;
-                        x2 = pt2.X;
-                        y2 = pt2.Y;
-                        break;
-
-                    case XLinearGradientMode.BackwardDiagonal:
-                        x1 = pt2.X;
-                        y1 = pt1.Y;
-                        x2 = pt1.X;
-                        y2 = pt2.Y;
-                        break;
-                }
-            }
-            else
-            {
-                XPoint pt1 = renderer.WorldToView(brush._point1);
-                XPoint pt2 = renderer.WorldToView(brush._point2);
-
-                x1 = pt1.X;
-                y1 = pt1.Y;
-                x2 = pt2.X;
-                y2 = pt2.Y;
-            }
+            x1 = pt1.X;
+            y1 = pt1.Y;
+            x2 = pt2.X;
+            y2 = pt2.Y;
 
             const string format = Config.SignificantFigures3;
             Elements[Keys.Coords] = new PdfLiteral("[{0:" + format + "} {1:" + format + "} {2:" + format + "} {3:" + format + "}]", x1, y1, x2, y2);
@@ -129,14 +89,60 @@ namespace PdfSharp.Pdf.Advanced
             Elements[Keys.Function] = function;
             //Elements[Keys.Extend] = new PdfRawItem("[true true]");
 
-            string clr1 = "[" + PdfEncoders.ToString(color1, colorMode) + "]";
-            string clr2 = "[" + PdfEncoders.ToString(color2, colorMode) + "]";
+            var colors = new string[brush._colors.Length];
+            for (int i = 0; i < brush._colors.Length; i++)
+            {
+                var ensured_color = ColorSpaceHelper.EnsureColorMode(colorMode, brush._colors[i]);
+                colors[i] = "[" + PdfEncoders.ToString(ensured_color, colorMode) + "]";
+            }
 
-            function.Elements["/FunctionType"] = new PdfInteger(2);
-            function.Elements["/C0"] = new PdfLiteral(clr1);
-            function.Elements["/C1"] = new PdfLiteral(clr2);
+            int begin = 0;
+            for (int i = 2; i < brush._offsets.Length; i++)
+            {
+                if (brush._offsets[i - 1] < 0)
+                {
+                    begin = i - 1;
+                }
+            }
+
+            int end = brush._offsets.Length;
+            for (int i = brush._offsets.Length - 2; i > 0; i--)
+            {
+                if (brush._offsets[i] > 1)
+                {
+                    end = i + 1;
+                }
+            }
+            
+            var encode_begin = brush._offsets[begin] / (brush._offsets[begin] - brush._offsets[begin + 1]);
+            var encode_end = (1.0f - brush._offsets[end - 2]) / (brush._offsets[end - 1] - brush._offsets[end - 2]);
+
+            var subfunctions = new PdfArray();
+            for (int i = begin; i < end - 1; i++)
+            {
+                PdfDictionary subfunction = new PdfDictionary();
+                subfunction.Elements["/FunctionType"] = new PdfInteger(2);
+                subfunction.Elements["/C0"] = new PdfLiteral(colors[i]);
+                subfunction.Elements["/C1"] = new PdfLiteral(colors[i + 1]);
+                subfunction.Elements["/Domain"] = new PdfLiteral("[0 1]");
+                subfunction.Elements["/N"] = new PdfInteger(1);
+                subfunctions.Elements.Add(subfunction);
+            }
+
+            var bounds = "";
+            var encode = string.Format(System.Globalization.CultureInfo.InvariantCulture, "[{0:" + format + "}", encode_begin);
+            for (int i = begin + 1; i < end - 1; i++)
+            {
+                bounds += string.Format(System.Globalization.CultureInfo.InvariantCulture, " {0:" + format + "}", brush._offsets[i]);
+                encode += " 1 0";
+            }
+            encode += string.Format(System.Globalization.CultureInfo.InvariantCulture, " {0:" + format + "}]", encode_end);
+
+            function.Elements["/FunctionType"] = new PdfInteger(3);
+            function.Elements["/Functions"] = subfunctions;
             function.Elements["/Domain"] = new PdfLiteral("[0 1]");
-            function.Elements["/N"] = new PdfInteger(1);
+            function.Elements["/Bounds"] = new PdfLiteral("[" + bounds.Substring(Math.Min(bounds.Length, 1)) + "]");
+            function.Elements["/Encode"] = new PdfLiteral(encode);
         }
 
         /// <summary>

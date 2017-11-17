@@ -92,11 +92,28 @@ namespace PdfSharp.Drawing
         /// Initializes a new instance of the <see cref="XLinearGradientBrush"/> class.
         /// </summary>
         public XLinearGradientBrush(XPoint point1, XPoint point2, XColor color1, XColor color2)
+            : this(point1, point2, new XColor[] { color1, color2 }, new float[] { 0.0f, 1.0f })
+        { }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="XLinearGradientBrush"/> class.
+        /// </summary>
+        public XLinearGradientBrush(XPoint point1, XPoint point2, XColor[] colors, float[] offsets)
         {
+            if (point1 == point2)
+                throw new ArgumentException("Expected inequal bounds.");
+
+            if (colors.Length < 2)
+                throw new ArgumentException("Expected at least 2 colors.", "colors");
+
+            if (colors.Length != offsets.Length)
+                throw new ArgumentException("Expected equally sized arrays", "colors, offsets");
+            
             _point1 = point1;
             _point2 = point2;
-            _color1 = color1;
-            _color2 = color2;
+            _colors = colors.Clone() as XColor[];
+            _offsets = offsets.Clone() as float[];
+            Array.Sort(_offsets, _colors);
         }
 
 #if GDI
@@ -128,18 +145,21 @@ namespace PdfSharp.Drawing
         /// Initializes a new instance of the <see cref="XLinearGradientBrush"/> class.
         /// </summary>
         public XLinearGradientBrush(XRect rect, XColor color1, XColor color2, XLinearGradientMode linearGradientMode)
+            : this(rect, new XColor[] { color1, color2 }, new float[] { 0.0f, 1.0f }, linearGradientMode)
+        { }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="XLinearGradientBrush"/> class.
+        /// </summary>
+        public XLinearGradientBrush(XRect rect, XColor[] colors, float[] offsets, XLinearGradientMode linearGradientMode)
+            : this(
+                  linearGradientMode == XLinearGradientMode.BackwardDiagonal ? rect.TopRight : rect.TopLeft,
+                  linearGradientMode == XLinearGradientMode.Horizontal ? rect.TopRight : linearGradientMode == XLinearGradientMode.ForwardDiagonal ? rect.BottomRight : rect.BottomLeft,
+                  colors,
+                  offsets)
         {
             if (!Enum.IsDefined(typeof(XLinearGradientMode), linearGradientMode))
                 throw new InvalidEnumArgumentException("linearGradientMode", (int)linearGradientMode, typeof(XLinearGradientMode));
-
-            if (rect.Width == 0 || rect.Height == 0)
-                throw new ArgumentException("Invalid rectangle.", "rect");
-
-            _useRect = true;
-            _color1 = color1;
-            _color2 = color2;
-            _rect = rect;
-            _linearGradientMode = linearGradientMode;
         }
 
         // TODO: 
@@ -268,17 +288,16 @@ namespace PdfSharp.Drawing
             try
             {
                 Lock.EnterGdiPlus();
-                if (_useRect)
-                {
-                    brush = new GdiLinearGradientBrush(_rect.ToRectangleF(),
-                        _color1.ToGdiColor(), _color2.ToGdiColor(), (LinearGradientMode)_linearGradientMode);
-                }
-                else
-                {
-                    brush = new GdiLinearGradientBrush(
-                        _point1.ToPointF(), _point2.ToPointF(),
-                        _color1.ToGdiColor(), _color2.ToGdiColor());
-                }
+
+                brush = new GdiLinearGradientBrush(
+                    _point1.ToPointF(), _point2.ToPointF(),
+                    _colors[0].ToGdiColor(), _colors[_colors.Length - 1].ToGdiColor());
+                brush.InterpolationColors = new ColorBlend(_colors.Length);
+                var colors = new Color[_colors.Length];
+                for (int i = 0; i < _colors.Length; i++)
+                    colors[i] = _colors[i].ToGdiColor();
+                brush.InterpolationColors.Colors = colors;
+                brush.InterpolationColors.Positions = _offsets;
                 if (!_matrix.IsIdentity)
                     brush.Transform = _matrix.ToGdiMatrix();
                 //brush.WrapMode = WrapMode.Clamp;
@@ -303,56 +322,16 @@ namespace PdfSharp.Drawing
             //}
 
             System.Windows.Media.LinearGradientBrush brush;
-            if (_useRect)
-            {
+            GradientStopCollection gsc = new GradientStopCollection();
+            for (int i = 0; i < _colors.Length; i++)
+                gsc.Add(new GradientStop() { Color = _colors[i].ToWpfColor(), Offset = _offsets[i] });
 #if !SILVERLIGHT
-                brush = new System.Windows.Media.LinearGradientBrush(_color1.ToWpfColor(), _color2.ToWpfColor(), new SysPoint(0, 0), new SysPoint(1, 1));// rect.TopLeft, this.rect.BottomRight);
-                //brush = new System.Drawing.Drawing2D.LinearGradientBrush(rect.ToRectangleF(),
-                //  color1.ToGdiColor(), color2.ToGdiColor(), (LinearGradientMode)linearGradientMode);
+            brush = new LinearGradientBrush(gsc, _point1, _point2);
 #else
-                GradientStop gs1 = new GradientStop();
-                gs1.Color = _color1.ToWpfColor();
-                gs1.Offset = 0;
-
-                GradientStop gs2 = new GradientStop();
-                gs2.Color = _color2.ToWpfColor();
-                gs2.Offset = 1;
-
-                GradientStopCollection gsc = new GradientStopCollection();
-                gsc.Add(gs1);
-                gsc.Add(gs2);
-
-                brush = new LinearGradientBrush(gsc, 0);
-                brush.StartPoint = new Point(0, 0);
-                brush.EndPoint = new Point(1, 1);
+            brush = new LinearGradientBrush(gsc, 0);
+            brush.StartPoint = _point1;
+            brush.EndPoint = _point2;
 #endif
-
-            }
-            else
-            {
-#if !SILVERLIGHT
-                brush = new System.Windows.Media.LinearGradientBrush(_color1.ToWpfColor(), _color2.ToWpfColor(), _point1, _point2);
-                //brush = new System.Drawing.Drawing2D.LinearGradientBrush(
-                //  point1.ToPointF(), point2.ToPointF(),
-                //  color1.ToGdiColor(), color2.ToGdiColor());
-#else
-                GradientStop gs1 = new GradientStop();
-                gs1.Color = _color1.ToWpfColor();
-                gs1.Offset = 0;
-
-                GradientStop gs2 = new GradientStop();
-                gs2.Color = _color2.ToWpfColor();
-                gs2.Offset = 1;
-
-                GradientStopCollection gsc = new GradientStopCollection();
-                gsc.Add(gs1);
-                gsc.Add(gs2);
-
-                brush = new LinearGradientBrush(gsc, 0);
-                brush.StartPoint = _point1;
-                brush.EndPoint = _point2;
-#endif
-            }
             if (!_matrix.IsIdentity)
             {
 #if !SILVERLIGHT
@@ -386,11 +365,9 @@ namespace PdfSharp.Drawing
         //public WrapMode WrapMode { get; set; }
         //private bool interpolationColorsWasSet;
 
-        internal bool _useRect;
         internal XPoint _point1, _point2;
-        internal XColor _color1, _color2;
-        internal XRect _rect;
-        internal XLinearGradientMode _linearGradientMode;
+        internal XColor[] _colors;
+        internal float[] _offsets;
 
         internal XMatrix _matrix;
     }
